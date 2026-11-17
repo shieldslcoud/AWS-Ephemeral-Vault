@@ -51,7 +51,7 @@ jobs:
       TEAM: devops-dev
       AWS_DEFAULT_REGION: us-east-1
       WLC_SITE_ID: 432f36cf-46e2-4eb7-9e0a-5f928da51b6e
-      WLC_SERVICE_NAME: PDS_Pipeline_dev
+      WLC_SERVICE_NAME: org_Shieldscloud
       # Full path of the dynamic secret, e.g. /Dev/deployer2 (repo variable).
       WLC_SECRET_PATH: ${{ vars.WLC_SECRET_PATH }}
       # OIDC audience BeyondTrust expects (repo variable). Leave unset to use
