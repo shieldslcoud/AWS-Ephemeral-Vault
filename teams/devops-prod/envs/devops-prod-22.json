@@ -1,0 +1,5 @@
+{
+  "envName": "devops-prod-22",
+  "instanceType": "t3.micro",
+  "requestedBy": "DevOps_prod"
+}
