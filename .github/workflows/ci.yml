@@ -1,0 +1,73 @@
+name: ci
+on:
+  pull_request:
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install cfn-lint
+      - run: cfn-lint ephemeral-vault/infra/*.yaml
+
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install jsonschema
+      - run: python scripts/validate_manifests.py
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r ephemeral-vault/registrar/requirements.txt pytest
+      - run: pytest tests/
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ephemeral-vault/infra
+          framework: cloudformation
+      - name: gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz | tar xz
+          ./gitleaks detect --source . --redact
+
+  plan:
+    needs: [lint, schema]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_PLAN }}
+          aws-region: us-east-1
+      - run: pip install -r ephemeral-vault/registrar/requirements.txt
+      - name: Dry-run reconcile for each team
+        working-directory: ephemeral-vault
+        run: |
+          for t in $(ls teams); do
+            echo "## Team $t" >> /tmp/plan.md
+            python scripts/reconcile.py --team "$t" >> /tmp/plan.md 2>&1
+          done
+      - name: Comment plan on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/plan.md
