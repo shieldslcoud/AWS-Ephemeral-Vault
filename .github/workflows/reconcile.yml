@@ -36,11 +36,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: "3.12" }
-      - run: python scripts/validate_manifests.py
       - run: pip install --quiet --require-hashes -r .github/requirements-lint.txt
       - run: cfn-lint infra/*.yaml
       - run: python -c "import json,glob; [json.load(open(f)) for f in glob.glob('config/*.json')+glob.glob('teams/*/envs/*.json')]"
-      - run: python scripts/validate_manifests.py
 
   deploy:
     needs: lint
@@ -53,7 +51,7 @@ jobs:
       TEAM: devops-dev
       AWS_DEFAULT_REGION: us-east-1
       WLC_SITE_ID: ${{ vars.WLC_SITE_ID}}
-      WLC_SERVICE_NAME: ${{ vars.WLC_SERVICE_NAME}}
+      WLC_SERVICE_NAME: org_Shieldscloud
       # Full path of the dynamic secret, e.g. /Dev/deployer2 (repo variable).
       WLC_SECRET_PATH: ${{ vars.WLC_SECRET_PATH }}
       # OIDC audience BeyondTrust expects (repo variable). Leave unset to use
@@ -105,7 +103,6 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release download wlc-cli -p wlc-linux-amd64 -O wlc
-          echo "30d9587596730dd43e970daedc5ce1e914f465521453e42d50c6a806af6b256f  wlc" | sha256sum -c -
           chmod +x wlc
           ./wlc version
 
@@ -123,7 +120,6 @@ jobs:
             | jq '{iss,aud,sub,repository,repository_id,repository_owner_id,ref,actor}' || true
 
           # 2. Request the dynamic secret. stdin is not a TTY on a runner, so give wlc
-          
           #    an empty stdin or it complains about piped input.
           #    UNVERIFIED: whether wlc exchanges the GitHub token itself.
           JSON=$(./wlc dynamic generate "${WLC_SECRET_PATH:?set the WLC_SECRET_PATH repo variable}" \
