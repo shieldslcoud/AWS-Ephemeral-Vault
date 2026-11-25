@@ -103,6 +103,7 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release download wlc-cli -p wlc-linux-amd64 -O wlc
+          echo "30d9587596730dd43e970daedc5ce1e914f465521453e42d50c6a806af6b256f  wlc" | sha256sum -c -
           chmod +x wlc
           ./wlc version
 
