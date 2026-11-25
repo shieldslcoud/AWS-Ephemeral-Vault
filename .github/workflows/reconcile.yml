@@ -40,6 +40,7 @@ jobs:
       - run: pip install --quiet --require-hashes -r .github/requirements-lint.txt
       - run: cfn-lint infra/*.yaml
       - run: python -c "import json,glob; [json.load(open(f)) for f in glob.glob('config/*.json')+glob.glob('teams/*/envs/*.json')]"
+      - run: python scripts/validate_manifests.py
 
   deploy:
     needs: lint
