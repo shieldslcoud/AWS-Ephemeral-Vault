@@ -120,7 +120,7 @@ jobs:
             | jq '{iss,aud,sub,repository,repository_id,repository_owner_id,ref,actor}' || true
 
           # 2. Request the dynamic secret. stdin is not a TTY on a runner, so give wlc
-          echo "wlc args: service=$WLC_SERVICE_NAME site=$WLC_SITE_ID path=$WLC_SECRET_PATH aud=${WLC_AUDIENCE:-default}"
+          
           #    an empty stdin or it complains about piped input.
           #    UNVERIFIED: whether wlc exchanges the GitHub token itself.
           JSON=$(./wlc dynamic generate "${WLC_SECRET_PATH:?set the WLC_SECRET_PATH repo variable}" \
