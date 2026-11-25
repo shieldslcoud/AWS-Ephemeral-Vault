@@ -1,3 +1,8 @@
-# Each team can only get sign-off on changes to its own environment files
-/teams/devops-dev/envs/  @ramon01pro
-/teams/devops-prod/envs/  @pdasilva11 @ramon01pro
+*                      @ramon01pro
+/infra/                @ramon01pro
+/config/               @ramon01pro
+/teams/devops-prod/    @ramon01pro
+/teams/devops-dev/     @ramon01pro
+CLAUDE.md              @ramon01pro
+/.claude/              @ramon01pro
+/.github/workflows/    @ramon01pro

@@ -1,0 +1,121 @@
+name: plan
+
+# Read-only preview of what a merge would change in devops-dev.
+# Runs reconcile.py with --dry-run ONLY. Credentials come from a separate,
+# read-only BeyondTrust identity (cloudformation:ListStacks), never the deploy identity.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    # Fork PRs get no OIDC token and no repo variables.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write        # request the GitHub OIDC token for the plan identity
+      contents: read
+      pull-requests: write   # post the plan comment
+    env:
+      TEAM: devops-dev
+      AWS_DEFAULT_REGION: us-east-1
+      WLC_SITE_ID: ${{ vars.WLC_SITE_ID }}
+      WLC_SERVICE_NAME: ${{ vars.WLC_PLAN_SERVICE_NAME }}
+      WLC_SECRET_PATH: ${{ vars.WLC_PLAN_SECRET_PATH }}
+      WLC_AUDIENCE: ${{ vars.WLC_AUDIENCE }}
+      # reconcile.py requires these even with --dry-run
+      REGISTRAR_ARN: ${{ vars.REGISTRAR_ARN }}
+      ROLE_BOUNDARY_ARN: ${{ vars.ROLE_BOUNDARY_ARN }}
+      VPC_ID: ${{ vars.VPC_ID }}
+      SUBNET_ID: ${{ vars.SUBNET_ID }}
+      CFN_EXEC_ROLE: ${{ vars.CFN_EXEC_ROLE }}
+      STACK_PREFIX: ${{ vars.STACK_PREFIX }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Tephra runner sensor
+        uses: tephrasecurity/sensor@d79be5ca62dfe2dfd00fd1c40b5a51d1bdaa2449 # v1.3.0
+        with:
+          egress-policy: block
+          allowed-endpoints: |
+            sts.us-east-1.amazonaws.com
+            cloudformation.us-east-1.amazonaws.com
+            pypi.org
+            files.pythonhosted.org
+            api.beyondtrust.io
+            trace.tephrasecurity.com
+          console-url: https://trace.tephrasecurity.com
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: "3.12" }
+      - run: pip install --quiet --require-hashes -r .github/requirements-deploy.txt
+
+      - name: Install wlc
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release download wlc-cli -p wlc-linux-amd64 -O wlc
+          echo "30d9587596730dd43e970daedc5ce1e914f465521453e42d50c6a806af6b256f  wlc" | sha256sum -c -
+          chmod +x wlc
+          ./wlc version
+
+      - name: Get read-only AWS credentials (plan identity)
+        run: |
+          set +x
+          URL="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          if [ -n "$WLC_AUDIENCE" ]; then URL="$URL&audience=$WLC_AUDIENCE"; fi
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$URL" | jq -r .value)
+          echo "::add-mask::$OIDC"
+          # Claims are not secret. Printed so the identity's conditions can be checked against them.
+          echo "$OIDC" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
+            | jq '{iss,aud,sub,repository,repository_id,repository_owner_id,ref,event_name,actor}' || true
+
+          JSON=$(./wlc dynamic generate "${WLC_SECRET_PATH:?set the WLC_PLAN_SECRET_PATH repo variable}" \
+            --token "$OIDC" --service-name "$WLC_SERVICE_NAME" \
+            --site-id "$WLC_SITE_ID" --format json --no-input < /dev/null)
+
+          AK=$(echo "$JSON" | jq -r '(.secret // .).accessKeyId // empty')
+          SK=$(echo "$JSON" | jq -r '(.secret // .).secretAccessKey // empty')
+          ST=$(echo "$JSON" | jq -r '(.secret // .).sessionToken // empty')
+          if [ -z "$AK" ] || [ -z "$SK" ] || [ -z "$ST" ]; then
+            echo "::error::wlc did not return AWS credentials. Response keys: $(echo "$JSON" | jq -c 'paths|join(".")' 2>/dev/null | tr '\n' ' ')"
+            exit 1
+          fi
+          LEASE=$(echo "$JSON" | jq -r '(.secret // .).leaseId // empty')
+          echo "$LEASE $(printf %s "$AK" | sha256sum | cut -c1-64)" >> "$RUNNER_TEMP/tephra-wlc-leases"
+          for v in "$AK" "$SK" "$ST"; do echo "::add-mask::$v"; done
+          {
+            echo "AWS_ACCESS_KEY_ID=$AK"
+            echo "AWS_SECRET_ACCESS_KEY=$SK"
+            echo "AWS_SESSION_TOKEN=$ST"
+          } >> "$GITHUB_ENV"
+
+      - name: Confirm assumed role
+        run: aws sts get-caller-identity --query Arn --output text
+
+      - name: Plan (dry-run only)
+        run: |
+          set -o pipefail
+          {
+            echo "### Reconcile plan for \`$TEAM\` (dry-run, nothing applied)"
+            echo
+            echo '```'
+            python scripts/reconcile.py --team "$TEAM" --dry-run
+            echo '```'
+          } | tee /tmp/plan.md
+          if grep -qE 'delete=\[.+\]' /tmp/plan.md; then
+            printf '\n> **Warning:** this change deletes environments and deregisters their managed accounts when merged.\n' >> /tmp/plan.md
+          fi
+
+      - name: Comment plan on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body-file /tmp/plan.md --edit-last --create-if-none
