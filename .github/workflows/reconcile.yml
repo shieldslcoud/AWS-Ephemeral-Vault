@@ -122,10 +122,9 @@ jobs:
           echo "$OIDC" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
             | jq '{iss,aud,sub,repository,repository_id,repository_owner_id,ref,actor}' || true
 
-          # 2. Request the dynamic secret. stdin is not a TTY on a runner, so give wlc
-          
-          #    an empty stdin or it complains about piped input.
-          #    UNVERIFIED: whether wlc exchanges the GitHub token itself.
+          # 2. Request the dynamic secret. wlc exchanges the GitHub OIDC token itself.
+          #    stdin is not a TTY on a runner, so give wlc an empty stdin or it
+          #    complains about piped input.
           JSON=$(./wlc dynamic generate "${WLC_SECRET_PATH:?set the WLC_SECRET_PATH repo variable}" \
             --token "$OIDC" --service-name "$WLC_SERVICE_NAME" \
             --site-id "$WLC_SITE_ID" --format json --no-input < /dev/null)
