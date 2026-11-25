@@ -3,7 +3,10 @@
 
 Sources (all read from the repo, nothing hand-copied):
   * GitHub Actions   : `uses:` lines in .github/workflows/*.yml (must be pinned to a 40-char SHA)
-  * Python packages  : name==version pins in .github/requirements-*.txt (must carry --hash=)
+  * Python packages  : EVERY requirements*.txt tracked in the repo, wherever it lives; each line must be
+                       name==version with --hash=, and no -r/-e/URL/index options
+  * Other manifests  : pyproject.toml, setup.py, Pipfile, package.json, Dockerfile, go.mod ... are listed with a
+                       sha256 so any new or changed one shows up as an AIBOM diff
   * Binaries         : sha256 checks in workflows, plus .github/aibom-binaries.json for version/source
   * In-tree actions  : compiled files under .github/actions/*/dist, with sha256 and whether any workflow uses them
   * Agent (optional) : .github/aibom-agent.json for model, action and settings pins, when step 5 lands
@@ -12,7 +15,7 @@ Usage:  python scripts/gen_aibom.py           # rewrite AIBOM.md
         python scripts/gen_aibom.py --check   # exit 1 if AIBOM.md is stale or anything is unpinned
 Stdlib only, deterministic output (no timestamps) so the check is a plain diff.
 """
-import glob, hashlib, json, re, sys
+import glob, hashlib, json, re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,20 +45,49 @@ def actions():
     return [(n, p, v, ", ".join(sorted(w))) for (n, p, v), w in sorted(rows.items())]
 
 
+def tracked_files():
+    """All files in the repo, wherever they live (git ls-files, falling back to a walk that skips .git)."""
+    try:
+        out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        return sorted(ROOT / l for l in out.splitlines() if l)
+    except Exception:
+        return sorted(p for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.relative_to(ROOT).parts)
+
+
+REQ_RE = re.compile(r"(?:^|/)requirements[^/]*\.txt$")
+OTHER_RE = re.compile(
+    r"(?:^|/)(pyproject\.toml|setup\.py|setup\.cfg|Pipfile(\.lock)?|poetry\.lock|package(-lock)?\.json|"
+    r"yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|go\.(mod|sum)|Gemfile(\.lock)?|Cargo\.(toml|lock)|"
+    r"Dockerfile[^/]*|\.tool-versions)$")
+
+
 def packages():
     rows = []
-    for f in sorted(glob.glob(str(ROOT / ".github/requirements-*.txt"))):
-        text = open(f).read()
-        text = re.sub(r"\\\n", " ", text)
-        for line in text.splitlines():
-            m = re.match(r"([A-Za-z0-9_.\-]+)==([^\s;]+)", line)
+    for f in tracked_files():
+        r = rel(f)
+        if not REQ_RE.search(r):
+            continue
+        text = re.sub(r"\\\n", " ", open(f).read())
+        for raw in text.splitlines():
+            line = raw.split(" #")[0].strip() if not raw.lstrip().startswith("#") else ""
+            if not line:
+                continue
+            if line.startswith("-") and not line.startswith("--hash"):
+                problems.append(f"{r}: option/indirection not allowed in a requirements file: {line[:60]}")
+                continue
+            m = re.match(r"([A-Za-z0-9_.\-]+)(?:\[[^\]]*\])?==([^\s;]+)", line)
             if not m:
+                problems.append(f"{r}: not pinned with == : {line[:60]}")
                 continue
             hashes = len(re.findall(r"--hash=sha256:[0-9a-f]{64}", line))
             if hashes == 0:
-                problems.append(f"{rel(f)}: {m.group(1)}=={m.group(2)} has no --hash")
-            rows.append((m.group(1).lower(), m.group(2), hashes, Path(f).name))
+                problems.append(f"{r}: {m.group(1)}=={m.group(2)} has no --hash")
+            rows.append((m.group(1).lower(), m.group(2), hashes, r))
     return sorted(rows)
+
+
+def other_manifests():
+    return [(rel(f), hashlib.sha256(open(f, "rb").read()).hexdigest()) for f in tracked_files() if OTHER_RE.search(rel(f))]
 
 
 def binaries():
@@ -106,6 +138,12 @@ def render():
     pk = packages()
     o += ["", f"## Python packages ({len(pk)}, all installed with `--require-hashes`)", "", "| Package | Version | Hashes | File |", "|---|---|---|---|"]
     o += [f"| {n} | {v} | {h} | {f} |" for n, v, h, f in pk]
+    om = other_manifests()
+    o += ["", "## Other dependency manifests in the repo (review on every change)", ""]
+    if om:
+        o += ["| File | sha256 |", "|---|---|"] + [f"| {p} | `{h}` |" for p, h in om]
+    else:
+        o += ["- None."]
     bd = bundled()
     o += ["", "## Compiled bundles in the repo (review source vs dist on every change)", ""]
     if bd:
